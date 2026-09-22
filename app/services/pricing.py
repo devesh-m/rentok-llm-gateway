@@ -44,3 +44,4 @@ def calculate_cost(model_name: str, prompt_tokens: int, completion_tokens: int) 
     rate_in, rate_out = get_model_rates(model_name)
     total_cost = (prompt_tokens * rate_in) + (completion_tokens * rate_out)
     return round(total_cost, 8)
+
