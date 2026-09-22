@@ -55,3 +55,6 @@ Thumbs.db
 # Assignment raw PDF (keep repo clean)
 *.pdf
 
+# FastAPI Cloud local link metadata
+.fastapicloud/
+

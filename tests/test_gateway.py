@@ -16,7 +16,7 @@ async def test_health_check(client):
 async def test_auth_invalid_key(client):
     """Verify that an invalid or unauthenticated virtual key returns 401."""
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-20b",
         "messages": [{"role": "user", "content": "Hello"}],
     }
     response = await client.post(
@@ -35,7 +35,7 @@ async def test_budget_enforcement_clean_429(client):
     Verify that an over-budget key is cleanly rejected with HTTP 429 and does not pass through.
     """
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-20b",
         "messages": [{"role": "user", "content": "This request should be blocked."}],
     }
     response = await client.post(
@@ -56,7 +56,7 @@ async def test_chat_proxy_success_and_spend_logging(client):
     Proxy a chat call, verify response structure, and verify spend is persisted.
     """
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-20b",
         "messages": [{"role": "user", "content": "Hello LLM Gateway!"}],
     }
     response = await client.post(
@@ -88,7 +88,7 @@ async def test_caching_and_cost_savings(client):
     Verify that repeating an identical prompt results in a cache HIT and tracks savings.
     """
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-20b",
         "messages": [{"role": "user", "content": "Explain gravity in one sentence."}],
     }
     headers = {"Authorization": "Bearer gw-live-test"}

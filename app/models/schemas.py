@@ -13,6 +13,7 @@ class ChatMessage(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model: Optional[str] = Field("llama-3.3-70b-versatile", description="Model ID to call")
+    model: Optional[str] = Field("openai/gpt-oss-20b", description="Model ID to call")
     messages: List[ChatMessage] = Field(..., description="List of conversation messages")
     temperature: Optional[float] = Field(0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(None, gt=0)

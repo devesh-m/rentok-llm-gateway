@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: Optional[str] = None
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
     PRIMARY_MODEL: str = "llama-3.3-70b-versatile"
+    PRIMARY_MODEL: str = "openai/gpt-oss-20b"
 
     # Secondary / Fallback Provider (Gemini OpenAI-compatible endpoint)
     GEMINI_API_KEY: Optional[str] = None

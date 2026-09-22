@@ -4,6 +4,11 @@ from typing import Dict, Tuple
 # Format: (prompt_cost_per_million, completion_cost_per_million)
 MODEL_PRICING_PER_1M: Dict[str, Tuple[float, float]] = {
     # Groq Models
+    # Groq Models (Current 2026 Roster + Legacy)
+    "openai/gpt-oss-20b": (0.10, 0.20),
+    "openai/gpt-oss-120b": (0.50, 0.80),
+    "meta-llama/llama-4-scout-17b-16e-instruct": (0.15, 0.25),
+    "qwen/qwen3.8-27b": (0.20, 0.30),
     "llama-3.3-70b-versatile": (0.59, 0.79),
     "llama-3.1-70b-versatile": (0.59, 0.79),
     "llama-3.1-8b-instant": (0.05, 0.08),

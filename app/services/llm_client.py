@@ -101,6 +101,14 @@ class LLMProxyClient:
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.post(url, headers=headers, json=payload)
+            # If caller requested a deprecated or non-Groq model name (e.g. gpt-4o or llama-3.3-70b-versatile),
+            # automatically route to Groq's active PRIMARY_MODEL (openai/gpt-oss-20b)
+            if resp.status_code in (400, 404) and payload["model"] != settings.PRIMARY_MODEL:
+                logger.info(
+                    f"Model '{payload['model']}' not found on Groq; remapping to '{settings.PRIMARY_MODEL}'"
+                )
+                payload["model"] = settings.PRIMARY_MODEL
+                resp = await client.post(url, headers=headers, json=payload)
 
         latency_ms = (time.perf_counter() - start_time) * 1000.0
 

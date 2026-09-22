@@ -13,18 +13,29 @@
 
 ## 2. One Place the AI Was Wrong or Misleading, and How It Was Caught
 
-### The Misleading Suggestion:
-During initial research into deployment targets, the AI suggested that **FastAPI Cloud** might still be in closed private beta with a waitlist based on earlier 2024 web articles.
-
-### How It Was Caught & Verified:
-Rather than accepting the AI's cached assumption, we directed the AI to fetch the live website (`https://fastapicloud.com/docs/getting-started`), inspect `dashboard.fastapicloud.com/signup`, and run `python -m pip install "fastapi[standard]"` on the local system.
-Inspection of the installed CLI revealed active top-level commands:
-```bash
-python -m fastapi login
-python -m fastapi deploy
-python -m fastapi cloud
+### The Mistake 1 (Deployment Config):
+When creating `pyproject.toml` for FastAPI Cloud deployment, the AI specified the entrypoint using a file path:
+```toml
+[tool.fastapi]
+entrypoint = "app/main.py"
 ```
-This demonstrated that FastAPI Cloud is actively deployed and accessible via `fastapi[standard]`. Testing assumptions against live documentation and actual package binaries prevented an unnecessary fallback to a secondary platform.
+When we deployed the application using `python -m fastapi deploy`, the build succeeded, but the deployment status hung on `verifying_failed`.
+
+### How It Was Caught & Fixed:
+We inspected the live application container logs on the FastAPI Cloud dashboard, which revealed the exact startup crash:
+```
+⚡ Starting FastAPI in production mode
+Import string must be in the format module.submodule:app_name
+```
+FastAPI Cloud's production runner requires a standard Python ASGI import string rather than a filesystem path. We immediately corrected `pyproject.toml` to:
+```toml
+[tool.fastapi]
+entrypoint = "app.main:app"
+```
+and redeployed.
+
+### The Mistake 2 (Platform Availability Assumption):
+During initial research into deployment targets, the AI suggested that **FastAPI Cloud** might still be in closed private beta with a waitlist based on older web articles. We caught this by directly testing `pip install "fastapi[standard]"` and verifying the live `fastapi login` and `fastapi deploy` CLI commands.
 
 ---
 
