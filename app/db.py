@@ -98,3 +98,4 @@ async def init_db() -> None:
             session.add_all([test_key, exhausted_key])
             await session.commit()
             print("Database initialized and default virtual keys seeded: ['gw-live-test', 'gw-live-exhausted']")
+

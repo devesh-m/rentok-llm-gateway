@@ -1,5 +1,4 @@
 import time
-from fastapi import APIRouter, Depends, Header, Response, status
 from typing import Optional
 from fastapi import APIRouter, Depends, Header, Response, Security, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -27,7 +26,6 @@ security = HTTPBearer(auto_error=False)
 async def chat_completions(
     request: ChatCompletionRequest,
     response: Response,
-    authorization: str = Header(..., description="Virtual API Key: Bearer gw-live-..."),
     x_api_key: Optional[str] = Header(
         default="gw-live-test",
         description="Virtual API Key (e.g., gw-live-test or gw-live-exhausted)",
@@ -38,7 +36,6 @@ async def chat_completions(
 ):
     """
     Core LLM Gateway proxy endpoint:
-    1. Authenticates virtual API key & verifies remaining budget.
     1. Authenticates virtual API key (via Authorization: Bearer <key> or X-API-Key: <key>) & verifies remaining budget.
     2. Checks exact-match cache for identical prior prompt.
     3. Forwards to Primary Provider (Groq) with automatic fallback to Secondary (Gemini) or Mock.
@@ -66,7 +63,6 @@ async def chat_completions(
         )
 
     # 1. Pre-Check: Authenticate Key & Enforce Budget
-    key_obj = await usage_service.validate_virtual_key_and_budget(db, authorization)
     key_obj = await usage_service.validate_virtual_key_and_budget(db, raw_key)
 
     # 2. Smart Cache Check (Stretch Goal)
