@@ -193,7 +193,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     th { color: var(--muted); font-weight: 600; }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    .md-body { line-height: 1.6; color: var(--text); overflow-x: auto; }
+    .md-body p { margin-bottom: 10px; }
+    .md-body h1, .md-body h2, .md-body h3, .md-body h4 { margin: 14px 0 8px; color: #fff; font-weight: 600; }
+    .md-body ul, .md-body ol { margin: 8px 0 12px 22px; }
+    .md-body li { margin-bottom: 4px; }
+    .md-body strong { color: #58a6ff; }
+    .md-body code { background: #21262d; padding: 2px 5px; border-radius: 4px; font-family: monospace; font-size: 0.84rem; }
+    .md-body pre { background: #161b22; padding: 10px; border-radius: 6px; border: 1px solid var(--border); overflow-x: auto; margin: 10px 0; }
+    .md-body table { border: 1px solid var(--border); margin: 12px 0; width: 100%; }
+    .md-body th, .md-body td { border: 1px solid var(--border); padding: 8px 10px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 0.84rem; }
+    .md-body th { background: #161b22; color: #e6edf3; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
   <div class="container">
@@ -239,7 +251,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
         <div class="response-box" id="response-container" style="display:none;">
           <div class="meta-bar" id="response-meta"></div>
-          <div id="response-text" style="white-space: pre-wrap;"></div>
+          <div id="response-text" class="md-body"></div>
         </div>
       </div>
 
@@ -345,11 +357,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <span class="badge badge-ok">HTTP ${res.status} OK</span>
             <span class="badge ${cacheHeader === 'HIT' ? 'badge-hit' : 'badge-miss'}">X-Cache: ${cacheHeader}</span>
             <span>Provider: <b>${providerHeader}</b></span>
+            <span>Model: <b>${data.model || model}</b></span>
             <span>Tokens: <b>${tokens}</b></span>
             <span>Cost: <b>$${Number(cost).toFixed(7)}</b></span>
             <span>Latency: <b>${latency} ms</b></span>
           `;
-          respText.textContent = content;
+          respText.className = 'md-body';
+          respText.innerHTML = window.marked ? marked.parse(content) : content;
         } else {
           const errMsg = data.detail?.error?.message || JSON.stringify(data.detail || data);
           metaBar.innerHTML = `
