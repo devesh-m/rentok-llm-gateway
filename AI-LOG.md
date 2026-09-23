@@ -1,78 +1,43 @@
-# AI-LOG.md — AI Usage, Supervision & Engineering Reflections
+# AI-LOG.md
 
-## 1. Which AI Tools & Models Were Used, and for What
-- **AI Coding Assistant:** Gemini 3.8 Flash running within the Google Antigravity Agentic IDE.
-- **Tasks Assigned to AI:**
-  - Generating initial architectural boilerplate and Pydantic schemas.
-  - Designing the asynchronous SQLite schema with Write-Ahead Logging (WAL) configuration.
-  - Synthesizing upstream OpenAI-compatible schemas for Groq and Gemini.
-  - Researching documentation for FastAPI Cloud CLI commands and Neon integration.
-  - Formulating automated test cases for edge condition verification (e.g. 429 budget exhaustion).
-
----
-
-## 2. One Place the AI Was Wrong or Misleading, and How It Was Caught
-
-### The Mistake 1 (Deployment Config):
-When creating `pyproject.toml` for FastAPI Cloud deployment, the AI specified the entrypoint using a file path:
-```toml
-[tool.fastapi]
-entrypoint = "app/main.py"
-```
-When we deployed the application using `python -m fastapi deploy`, the build succeeded, but the deployment status hung on `verifying_failed`.
-
-### How It Was Caught & Fixed:
-We inspected the live application container logs on the FastAPI Cloud dashboard, which revealed the exact startup crash:
-```
-⚡ Starting FastAPI in production mode
-Import string must be in the format module.submodule:app_name
-```
-FastAPI Cloud's production runner requires a standard Python ASGI import string rather than a filesystem path. We immediately corrected `pyproject.toml` to:
-```toml
-[tool.fastapi]
-entrypoint = "app.main:app"
-```
-and redeployed.
-
-### The Mistake 2 (Platform Availability Assumption):
-During initial research into deployment targets, the AI suggested that **FastAPI Cloud** might still be in closed private beta with a waitlist based on older web articles. We caught this by directly testing `pip install "fastapi[standard]"` and verifying the live `fastapi login` and `fastapi deploy` CLI commands.
+## 1. Which AI Tools & Models I Used, and for What
+- **Tool:** Google Antigravity IDE (coding agent).
+- **What I used it for:**
+  - Scaffolding the FastAPI route structure (`chat.py`, `keys.py`, `usage.py`, `health.py`), SQLAlchemy async models, and Pydantic request/response schemas.
+  - Writing the SHA-256 prompt normalization and cache lookup service (`cache_service.py`).
+  - Building a single-page HTML/JS testing console at `GET /` so I could test requests, cache hits, and `429` budget blocks without clicking through Swagger UI bloat.
+  - Writing the `pytest` suite (`tests/test_gateway.py`).
 
 ---
 
-## 3. One Place We Overrode the AI's Suggestion & Why
+## 2. Where the AI Was Wrong or Misleading, and How I Caught It
 
-### The AI's Initial Proposal:
-The AI initially proposed using the official `groq` and `google-generativeai` Python SDKs for communicating with upstream providers.
+### 1. Outdated Groq Model Names (`404 Model Not Found`)
+The AI initially hardcoded `llama-3.3-70b-versatile` as the default primary model for Groq based on older training data. When I tested the live endpoint on FastAPI Cloud, requests were silently falling back to the mock responder because Groq had retired `llama-3.3-70b-versatile` and returned HTTP `404`. I checked the current Groq model documentation, switched the primary model to `openai/gpt-oss-20b` (and `meta-llama/llama-4-scout-17b-16e-instruct`), and added automatic model remapping in `llm_client.py` so callers passing legacy model strings don't fail.
 
-### Why We Overrode It:
-We overrode this in favor of using raw **`httpx.AsyncClient`** calls directly to their OpenAI-compatible endpoints (`/openai/v1/chat/completions` for Groq, and `/v1beta/openai/chat/completions` for Gemini):
-1. **Dependency Bloat & Lock-in:** Pulling in multiple heavyweight SDKs adds hundreds of transitive dependencies and complicates error handling across different custom exception types.
-2. **Unified Fallback Contract:** Both Groq and Gemini expose standard OpenAI-compatible REST endpoints. By using `httpx`, our proxy logic treats providers uniformly with identical request/response schemas, connection pooling, and timeout policies.
-3. **Transparency in the Request Lifecycle:** Using a raw HTTP client gives us direct control over headers, status codes, and exact wire payloads without vendor SDK abstractions hiding the request lifecycle.
+### 2. Python 3.14 + `aiosqlite` Hanging on FastAPI Cloud
+When deploying to FastAPI Cloud, the build defaulted to Python `3.14.3` because `requires-python = ">=3.11"` had no upper bound, and SQLite writes went to `./gateway.db` inside the container directory. The health check hung until FastAPI Cloud marked the deployment `verifying_failed`. I caught this by inspecting the container build logs, pinned `.python-version` to `3.12`, switched SQLite on Linux containers to `/tmp/gateway.db` with `NullPool`, and verified every fix locally with `pytest` before committing.
 
 ---
 
-## 4. Staying in Control of Code You Didn't Type by Hand
+## 3. Where I Overrode the AI's Suggestion, and Why
 
-To maintain absolute command over code generated by AI, we enforced strict boundaries:
-
-1. **Secrets Isolation & Hygiene:**
-   - Real provider keys (`GROQ_API_KEY`, `GEMINI_API_KEY`) and the master `ADMIN_SECRET_KEY` are only ever read from environment variables via Pydantic `BaseSettings`.
-   - `.gitignore` was configured as the very first step to block `.env`, `*.db`, and log files from entering git history.
-   - Provider API keys are never returned in client response payloads or error traces.
-2. **Budget Arithmetic & Precision:**
-   - Budget math (`current_spend < max_budget`) was manually verified to prevent floating-point precision leaks.
-   - We verified that token counts are extracted directly from provider response payloads (`usage.prompt_tokens` and `usage.completion_tokens`) rather than rough client-side character estimations.
-3. **Database Concurrency & Atomic Updates:**
-   - Inspected SQLite transaction behavior to ensure balance updates use atomic SQL increments (`SET current_spend = current_spend + :cost`) rather than read-modify-write loops in Python memory.
+1. **Replaced `gemini-1.5-flash` Fallback with OpenRouter (`openrouter/free`):**
+   The AI originally wired Google Gemini (`gemini-1.5-flash`) as the secondary fallback provider. I overrode this and pointed the fallback to OpenRouter's free auto-router (`openrouter/free` on `https://openrouter.ai/api/v1/chat/completions`), which automatically routes each fallback request to an active `$0` model (such as `nvidia/nemotron-3-super-120b-a12b:free`) using the exact same OpenAI wire format.
+2. **Used `httpx.AsyncClient` Instead of Provider-Specific SDKs:**
+   Instead of installing separate `groq` and `openai` SDK packages, I kept all provider calls on raw `httpx.AsyncClient` requests against `/chat/completions`. That kept the dependency tree small and let both Groq and OpenRouter share identical timeout and error-handling logic.
 
 ---
 
-## 5. Something Learned from Scratch This Weekend & Getting Up to Speed
+## 4. How I Stayed in Control of Code I Didn't Type by Hand
+- **Secrets & Environment Variables:** Verified that `GROQ_API_KEY`, `OPENROUTER_API_KEY`, and `ADMIN_SECRET_KEY` are only loaded through `pydantic-settings` from environment variables (`fastapi cloud env set`) and that `.env` and `*.db` are excluded in `.gitignore`.
+- **Budget & Spend Math:** Checked `usage_service.py` and `pricing.py` line by line to verify that:
+  1. `validate_virtual_key_and_budget()` runs *before* any upstream HTTP call is made and raises `HTTPException(429)` when `current_spend >= max_budget`.
+  2. Spend updates execute an atomic SQL increment (`current_spend = current_spend + :cost`) using the exact `prompt_tokens` and `completion_tokens` returned by the provider.
+  3. Cache hits (`X-Cache: HIT`) record `$0.00` spend against the key's budget while logging `cost_saved` separately.
 
-### What Was Learned:
-- **FastAPI Cloud Architecture & Serverless Persistence:** 
-  Gained an in-depth understanding of how FastAPI's official cloud platform (`fastapicloud.com`) packages applications via `fastar`, handles zero-config deployments through `fastapi deploy`, and integrates with serverless PostgreSQL providers like Neon.
-- **SQLite WAL Mode Concurrency Mechanics:**
-  Learned how SQLite's `PRAGMA journal_mode=WAL` (Write-Ahead Logging) decouples readers from writers by maintaining a separate `-wal` file, enabling concurrent non-blocking reads during LLM proxying while maintaining strict ACID write safety.
+---
 
+## 5. Something I Learned from Scratch This Weekend
+- **FastAPI Cloud Deployment & Container Lifecycle:** Learned how `fastapi deploy` builds containers with `uv`, how its post-deploy readiness probe verifies the container before switching traffic, and why SQLite on Linux containers needs `/tmp` + `NullPool` to avoid file-lock deadlocks across async workers.
+- **OpenRouter Free Auto-Router (`openrouter/free`):** Learned how OpenRouter's `openrouter/free` meta-model dynamically selects the healthiest free upstream model per request and returns the resolved model ID (`nvidia/nemotron-3-super-120b-a12b:free`) in the response body.

@@ -1,138 +1,100 @@
-# DECISIONS.md — System Design, Architecture & Tradeoffs
+# DECISIONS.md
 
-## 1. What Was Built (in 3–4 Sentences)
-We built a production-focused, lightweight **LLM Gateway** in Python using **FastAPI** that sits between client applications and upstream LLM providers (Groq and OpenRouter `openrouter/free`). The gateway issues virtual API keys, enforces hard per-key budget limits (in USD spend), tracks granular prompt/completion token usage in an ACID-compliant datastore, and provides automated provider fallback resilience when the primary provider encounters timeouts, rate limits, or server errors. In addition, an exact-match prompt cache (stretch goal) bypasses upstream inference entirely for identical queries, returning results in under 5ms while tracking cumulative cost savings.
+## 1. What I Built
+I built a lightweight HTTP LLM gateway in Python (FastAPI) that proxies OpenAI-compatible chat completion requests (`/v1/chat/completions`) to Groq as the primary provider and OpenRouter (`openrouter/free`) as the fallback. Callers authenticate using gateway-issued virtual keys (`gw-live-...`) so real upstream API keys never leave the server. Every request checks the key's remaining USD budget before forwarding, logs prompt/completion tokens and cost in SQLite, and caches exact-match responses (`X-Cache: HIT/MISS`) to avoid paying twice for identical prompts.
 
 ---
 
 ## 2. Moving Parts & Request Lifecycle
 
-```
-[ Client Request ]
-  (curl / Python / frontend with Authorization: Bearer gw-live-xxx)
-       │
-       ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 1. Virtual Key Authentication & Budget Pre-Check                │
-│    - Extract virtual key from Authorization header.             │
-│    - Lookup key in DB; verify is_active == True.                │
-│    - Check if current_spend >= max_budget.                     │
-│    - IF EXHAUSTED: Return HTTP 429 ("Budget exceeded").         │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │ Passed (under budget)
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 2. Smart Cache Layer (Stretch Goal)                             │
-│    - Compute SHA-256 hash of normalized request (model+prompt). │
-│    - IF HIT: Increment cache hit counter, log $0 cost, inject   │
-│      'X-Cache: HIT' header, and immediately return response.    │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │ Miss (X-Cache: MISS)
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 3. Resilient LLM Dispatch (Primary -> Secondary Fallback)       │
-│    - Step A: Attempt Primary Provider (Groq / gpt-oss-20b).     │
-│    - Step B: If Groq returns 429, 5xx, or times out (15s):      │
-│              Catch exception & route to OpenRouter (openrouter/free).│
-│    - Step C: If all remote providers fail / offline:            │
-│              Gracefully route to structured Mock Provider.      │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │ Upstream Success (Tokens returned)
-                                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ 4. Cost Accounting & Usage Persistence (Atomic DB Transaction)  │
-│    - Calculate request cost from pricing matrix:                │
-│      cost = (prompt_tokens * rate_in) + (comp_tokens * rate_out)│
-│    - Atomically increment: current_spend = current_spend + cost │
-│    - Insert detailed log into `usage_logs`.                     │
-│    - Store payload in `response_cache` for subsequent queries.   │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │
-                                 ▼
-[ 5. Response to Client with Token Usage & Gateway Metadata ]
+```text
+Client (POST /v1/chat/completions + Authorization: Bearer gw-live-test)
+  │
+  ├─► 1. Auth & Budget Check (usage_service.py)
+  │      Look up virtual key in SQLite `virtual_keys`.
+  │      If key is missing/inactive -> HTTP 401.
+  │      If current_spend >= max_budget -> HTTP 429 Too Many Requests.
+  │
+  ├─► 2. Exact-Match Cache Lookup (cache_service.py)
+  │      Hash normalized (model, messages, temperature, max_tokens) with SHA-256.
+  │      If found in `response_cache` -> log $0.00 request, set `X-Cache: HIT`, return immediately.
+  │
+  ├─► 3. Upstream Provider Dispatch (llm_client.py)
+  │      Try Primary: Groq (`openai/gpt-oss-20b`).
+  │      If Groq times out (15s), rate-limits (429), or 5xx errors ->
+  │      Fall back to Secondary: OpenRouter (`openrouter/free`).
+  │
+  ├─► 4. Usage & Spend Logging (usage_service.py + pricing.py)
+  │      Read `prompt_tokens` and `completion_tokens` from provider response.
+  │      Compute USD cost from per-1M-token rate table.
+  │      Insert row into `usage_logs` and atomically increment `virtual_keys.current_spend`.
+  │      Save response payload into `response_cache`.
+  │
+  └─► 5. Response Returned to Caller
+         Standard OpenAI JSON schema + `gateway_metadata` (provider, latency_ms, cost_usd).
 ```
 
 ---
 
-## 3. Core Architectural Decisions & Tradeoffs
+## 3. Most Important Decisions
 
-### Decision 1: Language & Framework — Python + FastAPI
-- **Options Considered:** Node.js (Fastify/Express), Go (`net/http`), Python (FastAPI).
-- **Choice:** **FastAPI (Python 3.12)**.
-- **Tradeoff Accepted:** Go or Rust would yield marginally lower base memory consumption per idle process. However, LLM gateway performance is almost entirely dominated by network I/O wait time (waiting 500ms–2000ms for LLM generation). FastAPI's native `async`/`await` event loop handles thousands of concurrent pending I/O tasks effortlessly, while Pydantic provides type validation for OpenAI-compatible schemas, and FastAPI automatically generates Swagger UI (`/docs`).
+### 1. Non-Streaming JSON vs. SSE Streaming
+- **Options considered:** Server-Sent Events (`stream: true`) vs. synchronous JSON (`stream: false`).
+- **Picked:** Non-streaming JSON.
+- **Tradeoff accepted:** Higher time-to-first-token for interactive chat UIs, in exchange for exact token accounting. In non-streaming mode, upstream providers return authoritative `prompt_tokens` and `completion_tokens` in the response body before we commit spend to the database. With streaming, a client disconnect mid-stream forces you to estimate tokens via a local tokenizer (`tiktoken`) and complicates post-request budget updates.
 
-### Decision 2: Datastore Strategy — SQLite WAL (Local) + Neon Postgres (Cloud)
-- **Options Considered:** External Redis-only, DynamoDB, PostgreSQL-only, SQLite with WAL mode.
-- **Choice:** **SQLite (WAL mode) via `aiosqlite` with a standard `DATABASE_URL` abstraction for PostgreSQL**.
-- **Tradeoff Accepted:** SQLite eliminates external infrastructure dependencies during development and single-instance deployments, delivering sub-millisecond local reads (<0.2ms) for key validation. The tradeoff is that standard SQLite cannot be written to concurrently across multiple distributed serverless nodes without filesystem synchronization. By abstracting the engine through SQLAlchemy, the system runs with zero setup locally, but seamlessly points to a hosted PostgreSQL instance (like Neon) when running multi-instance in the cloud.
+### 2. Budgeting in USD ($) vs. Request or Token Counts
+- **Options considered:** Capping by request count, raw token count, or estimated USD cost.
+- **Picked:** USD cost calculated from a per-model pricing table (`app/services/pricing.py`).
+- **Tradeoff accepted:** We have to maintain a pricing dictionary in code when models change. However, request caps ignore prompt length (a 50-token prompt and an 8,000-token prompt count the same), and token caps break when routing across different models with different costs. Even on free-tier providers (`openrouter/free`), tracking shadow USD cost lets us test realistic budget enforcement (`$1.00` cap on `gw-live-test`, `$0.00` on `gw-live-exhausted`).
 
-### Decision 3: Non-Streaming vs. Streaming
-- **Options Considered:** Server-Sent Events (SSE) streaming vs. Non-streaming JSON responses.
-- **Choice:** **Non-streaming JSON**.
-- **Tradeoff Accepted:** The assignment explicitly asks to pick one and defend it. Non-streaming introduces perceived latency for human chat interfaces because the client waits for the entire response before rendering. However, for a *gateway whose primary responsibility is strict budget accounting and spend security*, non-streaming is far more robust. LLM providers return exact, authoritative token counts (`usage.prompt_tokens` and `usage.completion_tokens`) in the final non-streaming payload. Streaming requires parsing chunk deltas in real-time, estimating token counts via heuristics (like tiktoken) if the stream terminates abruptly, and managing complex partial-failure recovery.
+### 3. SQLite (WAL Mode) vs. Hosted Postgres / Redis
+- **Options considered:** Redis, hosted Postgres (Neon/Supabase), or embedded SQLite with Write-Ahead Logging (`aiosqlite`).
+- **Picked:** SQLite in WAL mode (`/tmp/gateway.db` on FastAPI Cloud, `./gateway.db` locally) via async SQLAlchemy.
+- **Tradeoff accepted:** Container restarts on a single-node PaaS wipe `/tmp/gateway.db` (which is why `init_db()` re-seeds the test keys on startup), and SQLite only scales to a single container instance. The benefit is zero network round-trip latency (<0.5ms for key lookups vs. 20–50ms to a remote cloud DB) and zero external database credentials needed to run or review the project.
 
-### Decision 4: Budget Metric — Actual Currency Spend (USD) vs. Request Counts
-- **Options Considered:** Request counter (e.g. 500 requests), Token counter (e.g. 100,000 tokens), Financial Cost (USD $).
-- **Choice:** **Financial Cost (USD $)**.
-- **Tradeoff Accepted:** Request counting is trivial to implement but completely ignores token variance (a 10-token prompt costs 100x less than an 8,000-token prompt). Raw token counts fail when routing across different models (e.g., Llama 3.1 8B costs \$0.05/1M tokens, while Llama 3.3 70B costs \$0.59/1M tokens). Calculating spend based on exact token pricing tables mirrors actual production economics. The accepted tradeoff is maintaining a model pricing lookup table in code.
+### 4. Synchronous Pre/Post Logging vs. Background Queue
+- **Options considered:** `FastAPI.BackgroundTasks` / Redis queue vs. awaiting the DB write inside the request lifecycle.
+- **Picked:** Synchronous `await` before returning the response.
+- **Tradeoff accepted:** Adds ~1–2ms of SQLite write latency to the HTTP response, but guarantees that `current_spend` is updated immediately so the very next sequential request sees the new balance.
 
 ---
 
 ## 4. First-Principles: Why Enforce Budgets at the Gateway Instead of Trusting Callers?
-
-In distributed systems, **trusting the client to self-report or enforce its own limits violates basic zero-trust security principles**:
-1. **Malicious or Compromised Clients:** If a client API key is leaked or an internal service is hijacked, a compromised client will simply ignore client-side checks and drain upstream credits.
-2. **Buggy Callers & Infinite Loops:** The most common cause of catastrophic cloud spend is developer error — an unhandled retry loop, recursive agent loop, or batch job run with the wrong arguments. A centralized gateway acts as an immutable circuit breaker that cuts off traffic regardless of caller bugs.
-3. **Multi-Tenant Attribution & Centralized Policy:** When multiple teams or customer applications share underlying provider accounts, client-side enforcement requires replicating pricing logic and rate-limiting across every client codebase (Python, TypeScript, Go). Centralizing policy at the gateway ensures a single source of truth for billing and audit logs.
+Callers cannot be trusted to enforce their own budgets for two reasons:
+1. **Buggy client code is the #1 cause of runaway LLM bills.** An accidental `while True` retry loop or an unguarded frontend endpoint will happily ignore client-side limits and burn through upstream provider credits in minutes.
+2. **Shared state across multiple callers.** Even well-behaved services don't know what other workers or scripts sharing the same virtual key have spent in the last second. Only the gateway sits in the critical path of every request and holds a single source of truth for cumulative spend.
 
 ---
 
-## 5. Concurrency: Simultaneous Requests on a Near-Exhausted Key
-
-### What happens if two requests on a near-exhausted key arrive at the exact same millisecond?
-- **Scenario:** Key budget has **\$0.01** remaining. Request A and Request B hit the gateway simultaneously.
-- **Pre-check:** Both requests query the database concurrently. Since current spend is \$0.009, both pass the pre-check.
-- **Upstream Execution:** Both requests complete against the provider, each incurring \$0.005 in token costs.
-- **Post-update:** Both requests record their spend. The key ends up at **\$0.019** spend — slightly exceeding the \$0.010 cap by \$0.009.
-- **Our Policy & Defense:** We intentionally implemented **optimistic soft-limit enforcement with atomic post-updates**.
-  - *Why not pessimistic locking?* If we pessimistically lock the key row or reserve funds *before* calling the LLM, every concurrent request for that key is serialized. If Request A takes 2 seconds to generate, Request B must sit waiting before even being sent to Groq. In LLM workloads with multi-second latencies, pessimistic locking destroys gateway throughput.
-  - *The Tradeoff:* Accepting micro-overages on the final concurrent boundary request preserves maximum throughput for 99.9% of traffic while guaranteeing that *all subsequent requests immediately and permanently 429 block*.
+## 5. Concurrency: Two Requests on a Near-Exhausted Key Hitting at Once
+- **What happens:** Suppose `gw-live-test` has `$0.0001` remaining and two concurrent requests (`R1` and `R2`) arrive at the exact same millisecond. Both read `current_spend < max_budget` during the pre-check (`validate_virtual_key_and_budget`), so **both are allowed upstream**. When they return (~600ms later), both execute an atomic SQL increment (`UPDATE virtual_keys SET current_spend = current_spend + :cost`). No spend data is lost, but the key's final `current_spend` can slightly overshoot `max_budget` by the cost of one in-flight request before subsequent requests get blocked with `429`.
+- **Did I handle it or knowingly not?** I handled the **write race** (using an atomic SQL `current_spend + :cost` update instead of read-modify-write in Python), and **knowingly accepted the pre-check race**. Fixing the pre-check race requires either serializing all LLM requests per key with a pessimistic lock (which kills concurrency for 1+ second per call) or reserving an estimated `max_tokens * rate_out` hold before calling the provider and refunding the difference afterward. For a minimal gateway, a 1-request soft overshoot is a standard and pragmatic trade-off.
 
 ---
 
-## 6. Fallback / Resilience Policy
-
-Our policy: **Tiered Failover with Graceful Degradation**
-1. **Primary Provider:** Groq (`llama-3.3-70b-versatile` / `llama-3.1-8b-instant`). Ultra-fast responses with high throughput.
-2. **Trigger Conditions:** If Groq returns HTTP `429` (Rate Limited), HTTP `500/502/503/504` (Provider Outage), or throws a `RequestTimeout` (>15 seconds), the error is caught and logged.
-3. **Secondary Provider (Fallback):** Google Gemini (`gemini-1.5-flash` via OpenAI-compatible endpoint).
-4. **Offline / Dev Mock Fallback:** If both providers fail or external API keys are not supplied during automated CI tests, the gateway returns a structured synthetic fallback response rather than returning an unhandled 500 error to the caller.
+## 6. Fallback Policy
+1. **Primary (`groq`):** Send to Groq (`openai/gpt-oss-20b`) with a 15-second timeout. If the caller passes a deprecated or unknown model name (like `gpt-4o` or `llama-3.3-70b-versatile`), the gateway remaps it to `openai/gpt-oss-20b` so requests don't 404.
+2. **Secondary (`openrouter`):** If Groq returns HTTP `429`, `5xx`, or times out, the gateway catches the error and routes the prompt to OpenRouter's free auto-router (`openrouter/free`), which picks the healthiest available free model (e.g. `nvidia/nemotron-3-super-120b-a12b:free`).
+3. **Final fail-safe (`mock`):** If both providers are down or credentials aren't set in local testing, a deterministic mock responder returns a structured response so the budget and logging pipeline can still be tested offline.
 
 ---
 
-## 7. What Was Deliberately NOT Built & Why
-
-1. **No Frontend UI:** As directed by the assignment, zero weekend hours were spent on styling or web dashboards. Spend and cache queries are exposed as clean REST endpoints (`GET /v1/admin/usage`, `GET /v1/admin/cache/stats`).
-2. **No Multi-Tenant Organization Hierarchies:** Avoided building RBAC, user management, and organization trees. A simple virtual key model with master admin bearer authentication accomplishes the security objective cleanly.
-3. **No Heavy Streaming Token Estimation:** Left out SSE streaming to keep token calculation exact, deterministic, and ACID-compliant without heuristic approximations.
-
----
-
-## 8. Least Confident Decision: Argue Both Sides
-
-**The Decision:** *Enforcing budgets asynchronously post-request vs. Pre-authorizing estimated budgets.*
-- **Side A (Post-request actual billing — What we chose):** We don't know how many completion tokens the LLM will generate until it finishes. Charging actual tokens post-request is simple and guarantees that callers are never overcharged for failed/aborted generations.
-- **Side B (Pre-authorizing maximum tokens — The alternative):** If a malicious caller submits a prompt with `max_tokens: 4096` on a key with only \$0.001 balance, the gateway will process the request and allow a substantial budget overshoot on that single call. Pre-authorizing `max_tokens * cost_per_token` before forwarding would prevent overshoots completely, at the cost of requiring two-phase commit reservation logic and refunding unused tokens after the call.
+## 7. What I Deliberately Did NOT Build (and Why)
+- **SSE Streaming (`stream: true`):** Cut to keep token counting and cost deduction deterministic from the provider's `usage` block.
+- **Semantic Vector Caching (Embeddings / FAISS):** I built SHA-256 exact-match caching instead. Running an embedding model on every incoming prompt adds 50–150ms of latency and risks serving false-positive cached answers when two prompts differ by a single negation word ("is" vs "is not").
+- **Multi-tenant user login / RBAC:** Cut per the spec; static admin secret (`X-Admin-Secret`) + virtual keys (`gw-live-...`) cover the core requirement.
 
 ---
 
-## 9. Where It Breaks & One More Week Roadmap
+## 8. The One Decision I'm Least Confident About
+**Using local SQLite (`/tmp/gateway.db`) in production instead of an external Postgres database.**
+- **Case for SQLite:** It keeps the codebase self-contained, requires zero external cloud DB provisioning, and gives sub-millisecond reads/writes since the DB lives in the same container memory/disk space as FastAPI.
+- **Case against SQLite:** On FastAPI Cloud, `/tmp/gateway.db` is ephemeral across deployments or container restarts, and if the service scales to 2+ replicas behind a load balancer, each replica would have its own separate SQLite file—meaning a key could spend its `$1.00` budget once per replica.
 
-### Where it breaks under stress:
-1. **SQLite concurrency under heavy write loads:** While WAL mode handles concurrent reads effortlessly, concurrent writes are serialized at the database lock level. Under hundreds of writes per second, SQLite will throw `database is locked` errors.
-2. **Provider Rate Limits on Free Tier:** Groq's free tier has an organization-level limit of 30 RPM. A burst of requests across multiple virtual keys will trigger upstream 429s, forcing heavy reliance on fallback.
+---
 
-### What we would build with one more week:
-1. **Distributed Counter via Redis:** Migrate key budget tracking to atomic Redis Lua scripts (`INCRBYFLOAT`) for sub-millisecond distributed rate limiting and budgeting across horizontal gateway nodes.
-2. **Streaming with Real-Time SSE Chunk Counting:** Implement chunk-by-chunk token estimation using an embedded tokenizer to support streaming without sacrificing budget enforcement.
-3. **Tiered Provider Queuing & Circuit Breaking:** Implement circuit breaker patterns (e.g. Netflix Hystrix style) so that when a provider fails 5 times consecutively, it enters an OPEN state and immediately routes to fallback without waiting for timeouts.
+## 9. Where It Breaks & What I'd Do With One More Week
+1. **Multi-replica state split & ephemeral storage:** Move `DATABASE_URL` from SQLite to managed Postgres (Neon) + Redis for distributed atomic budget counters (`INCRBYFLOAT`).
+2. **Pre-flight budget reservation:** Reserve `max_tokens * completion_rate` prior to calling the upstream LLM and reconcile the unused amount once the actual `completion_tokens` return, closing the concurrent overshoot window.
+3. **Per-key rate limiting (RPM/TPM):** Add a sliding-window rate limiter alongside the total USD cap so a single burst can't exhaust upstream provider rate limits for other keys.
