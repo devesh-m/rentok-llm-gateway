@@ -3,7 +3,7 @@ name = "rentok-llm-gateway"
 version = "1.0.0"
 description = "Minimal Production LLM Gateway with virtual keys, budget enforcement, fallback, and caching"
 readme = "readme.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "fastapi[standard]>=0.115.0",
     "uvicorn[standard]>=0.30.0",

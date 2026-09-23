@@ -1,6 +1,8 @@
+import os
 import secrets
 from typing import AsyncGenerator
 from sqlalchemy import event, select
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncSession,
@@ -12,6 +14,10 @@ from app.models.key import Base, VirtualKey
 
 def get_normalized_database_url(url: str) -> str:
     """Normalize DATABASE_URL for async SQLAlchemy drivers."""
+    # In Linux cloud containers, use /tmp for SQLite if default relative path is specified
+    if os.name != "nt" and url in ("sqlite:///./gateway.db", "sqlite+aiosqlite:///./gateway.db"):
+        return "sqlite+aiosqlite:////tmp/gateway.db"
+
     if url.startswith("sqlite:///") and not url.startswith("sqlite+aiosqlite:///"):
         return url.replace("sqlite:///", "sqlite+aiosqlite:///")
     elif url.startswith("sqlite://") and not url.startswith("sqlite+aiosqlite://"):
@@ -26,12 +32,14 @@ def get_normalized_database_url(url: str) -> str:
 db_url = get_normalized_database_url(settings.DATABASE_URL)
 is_sqlite = db_url.startswith("sqlite")
 
-connect_args = {"check_same_thread": False} if is_sqlite else {}
+connect_args = {"check_same_thread": False, "timeout": 10} if is_sqlite else {}
+engine_kwargs = {"poolclass": NullPool} if is_sqlite else {}
 
 engine = create_async_engine(
     db_url,
     echo=False,
     connect_args=connect_args,
+    **engine_kwargs,
 )
 
 # Enable WAL (Write-Ahead Logging) mode for SQLite to maximize concurrent read/write performance
@@ -90,4 +98,3 @@ async def init_db() -> None:
             session.add_all([test_key, exhausted_key])
             await session.commit()
             print("Database initialized and default virtual keys seeded: ['gw-live-test', 'gw-live-exhausted']")
-
