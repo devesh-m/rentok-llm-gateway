@@ -253,6 +253,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div class="meta-bar" id="response-meta"></div>
           <div id="response-text" class="md-body"></div>
         </div>
+
+        <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--border);">
+          <h2 style="margin-bottom:8px;">Create Custom Virtual Key (POST /v1/admin/keys)</h2>
+          <div style="display:grid; grid-template-columns: 1fr 130px auto; gap:8px; align-items:end;">
+            <div>
+              <label style="margin-top:0;">Key Label</label>
+              <input type="text" id="new-key-name" value="Demo Micro-Budget Key" />
+            </div>
+            <div>
+              <label style="margin-top:0;">Max Budget ($)</label>
+              <input type="text" id="new-key-budget" value="0.000001" />
+            </div>
+            <button class="secondary" onclick="createNewKey()" id="create-key-btn">Create &amp; Select</button>
+          </div>
+          <div id="create-key-msg" style="font-size:0.78rem; color:var(--green); margin-top:6px;"></div>
+        </div>
       </div>
 
       <!-- RIGHT PANEL: Live Usage & Spend Tracker -->
@@ -310,6 +326,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const val = document.getElementById('key-select').value;
       document.getElementById('custom-key').value = val;
       refreshMetrics();
+    }
+
+    async function createNewKey() {
+      const name = document.getElementById('new-key-name').value.trim() || 'Custom Key';
+      const budget = parseFloat(document.getElementById('new-key-budget').value) || 0.000001;
+      const msgEl = document.getElementById('create-key-msg');
+      msgEl.textContent = 'Creating key...';
+      try {
+        const res = await fetch('/v1/admin/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name, max_budget: budget })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const sel = document.getElementById('key-select');
+          const opt = document.createElement('option');
+          opt.value = data.key_value;
+          opt.textContent = `${data.key_value} (${name} — $${budget} Budget)`;
+          sel.appendChild(opt);
+          sel.value = data.key_value;
+          document.getElementById('custom-key').value = data.key_value;
+          msgEl.textContent = `Created & selected: ${data.key_value} ($${budget} cap)`;
+          await refreshMetrics();
+        } else {
+          msgEl.textContent = 'Error creating key';
+        }
+      } catch (e) {
+        msgEl.textContent = String(e);
+      }
     }
 
     async function sendChatRequest() {

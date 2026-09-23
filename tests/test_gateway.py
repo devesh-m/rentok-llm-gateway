@@ -130,7 +130,7 @@ async def test_create_and_use_virtual_key(client):
 
     # Call proxy with the newly created key
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-20b",
         "messages": [{"role": "user", "content": "Testing new key"}],
     }
     proxy_resp = await client.post(
@@ -139,4 +139,63 @@ async def test_create_and_use_virtual_key(client):
         json=payload,
     )
     assert proxy_resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_dynamic_budget_exhaustion_after_first_call(client):
+    """
+    EDGE CASE:
+    Create a key with a tiny budget ($0.0000001).
+    Request #1 must succeed (200 OK) and push current_spend >= max_budget.
+    Request #2 with the same key must immediately be blocked with HTTP 429,
+    even if the prompt is in the exact-match cache.
+    """
+    admin_headers = {"X-Admin-Key": settings.ADMIN_SECRET_KEY}
+    create_resp = await client.post(
+        "/v1/admin/keys",
+        headers=admin_headers,
+        json={"name": "Micro Budget Key", "max_budget": 0.0000001},
+    )
+    assert create_resp.status_code == 201
+    micro_key = create_resp.json()["key_value"]
+
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "Unique micro budget prompt test"}],
+    }
+
+    # 1st call: under budget prior to call -> 200 OK
+    resp1 = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {micro_key}"},
+        json=payload,
+    )
+    assert resp1.status_code == 200
+
+    # 2nd call: spend now exceeds $0.0000001 -> must reject with 429 even though prompt is cached
+    resp2 = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {micro_key}"},
+        json=payload,
+    )
+    assert resp2.status_code == 429
+    assert resp2.json()["detail"]["error"]["type"] == "budget_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_free_fallback_routing(client):
+    """Verify that explicitly requesting openrouter/free routes cleanly and records usage."""
+    payload = {
+        "model": "openrouter/free",
+        "messages": [{"role": "user", "content": "Test OpenRouter fallback model routing"}],
+    }
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer gw-live-test"},
+        json=payload,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["usage"]["total_tokens"] > 0
+
 

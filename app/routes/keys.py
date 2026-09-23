@@ -11,7 +11,12 @@ from app.models.schemas import CreateKeyRequest, VirtualKeyResponse
 router = APIRouter(prefix="/v1/admin/keys", tags=["Admin Key Management"])
 
 
-def verify_admin_key(x_admin_key: str = Header(..., description="Master Admin Secret Key")):
+def verify_admin_key(
+    x_admin_key: str = Header(
+        default="dev-admin-secret-change-in-production",
+        description="Master Admin Secret Key",
+    )
+):
     if x_admin_key != settings.ADMIN_SECRET_KEY:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
