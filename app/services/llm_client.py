@@ -28,38 +28,47 @@ class LLMProxyClient:
     ) -> Tuple[ChatCompletionResponse, str, float, float]:
         """
         Attempts primary provider (Groq). If it errors, rate limits, or times out,
-        gracefully falls back to secondary provider (Gemini).
+        gracefully falls back to secondary provider (OpenRouter `openrouter/free`).
         Returns: (response, provider_used, latency_ms, cost_usd)
         """
         start_time = time.perf_counter()
+        requested_model = (request.model or "").strip()
+
+        # If caller explicitly requests `openrouter/free` and OpenRouter is configured, route directly
+        if requested_model == "openrouter/free" and settings.OPENROUTER_API_KEY:
+            try:
+                response, latency_ms, cost = await self._call_openrouter(request, start_time)
+                return response, "openrouter", latency_ms, cost
+            except Exception as exc:
+                logger.warning(f"Explicit OpenRouter request failed: {str(exc)}. Trying fallback chain.")
 
         # -------------------------------------------------------------
         # 1. Attempt Primary Provider: Groq
         # -------------------------------------------------------------
-        if settings.GROQ_API_KEY:
+        if settings.GROQ_API_KEY and requested_model != "openrouter/free":
             try:
                 response, latency_ms, cost = await self._call_groq(request, start_time)
                 return response, "groq", latency_ms, cost
             except Exception as exc:
                 logger.warning(
-                    f"Primary provider (Groq) failed with: {str(exc)}. Falling back to secondary provider."
+                    f"Primary provider (Groq) failed with: {str(exc)}. Falling back to OpenRouter (openrouter/free)."
                 )
         else:
-            logger.info("GROQ_API_KEY not configured. Checking secondary provider.")
+            logger.info("Skipping Groq or GROQ_API_KEY not configured. Routing to OpenRouter (openrouter/free).")
 
         # -------------------------------------------------------------
-        # 2. Attempt Secondary Fallback Provider: Google Gemini
+        # 2. Attempt Secondary Fallback Provider: OpenRouter (`openrouter/free`)
         # -------------------------------------------------------------
-        if settings.GEMINI_API_KEY:
+        if settings.OPENROUTER_API_KEY:
             try:
-                response, latency_ms, cost = await self._call_gemini(request, start_time)
-                return response, "gemini", latency_ms, cost
+                response, latency_ms, cost = await self._call_openrouter(request, start_time)
+                return response, "openrouter", latency_ms, cost
             except Exception as exc:
                 logger.warning(
-                    f"Secondary provider (Gemini) failed with: {str(exc)}. Checking mock fallback."
+                    f"Secondary provider (OpenRouter) failed with: {str(exc)}. Checking mock fallback."
                 )
         else:
-            logger.info("GEMINI_API_KEY not configured. Checking mock fallback.")
+            logger.info("OPENROUTER_API_KEY not configured. Checking mock fallback.")
 
         # -------------------------------------------------------------
         # 3. Offline / Dev Mock Fallback (Fail-Safe Resilience)
@@ -158,16 +167,18 @@ class LLMProxyClient:
             response=resp,
         )
 
-    async def _call_gemini(
+    async def _call_openrouter(
         self, request: ChatCompletionRequest, start_time: float
     ) -> Tuple[ChatCompletionResponse, float, float]:
-        """Forward request to Google Gemini OpenAI-compatible endpoint."""
-        url = f"{settings.GEMINI_BASE_URL.rstrip('/')}/chat/completions"
+        """Forward request to OpenRouter's free auto-router (`openrouter/free`)."""
+        url = f"{settings.OPENROUTER_BASE_URL.rstrip('/')}/chat/completions"
         headers = {
-            "Authorization": f"Bearer {settings.GEMINI_API_KEY}",
+            "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
             "Content-Type": "application/json",
+            "HTTP-Referer": "https://rentok-llm-gateway.fastapicloud.dev",
+            "X-Title": settings.APP_NAME,
         }
-        fallback_model = settings.FALLBACK_MODEL
+        fallback_model = settings.FALLBACK_MODEL  # "openrouter/free"
         payload: Dict[str, Any] = {
             "model": fallback_model,
             "messages": [m.model_dump() for m in request.messages],
@@ -188,7 +199,8 @@ class LLMProxyClient:
             prompt_tokens = usage.get("prompt_tokens", 0)
             completion_tokens = usage.get("completion_tokens", 0)
             total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
-            
+            resolved_model = data.get("model", fallback_model)
+
             cost = calculate_cost(fallback_model, prompt_tokens, completion_tokens)
 
             choices = [
@@ -196,9 +208,9 @@ class LLMProxyClient:
                     index=c.get("index", 0),
                     message=ChoiceMessage(
                         role=c.get("message", {}).get("role", "assistant"),
-                        content=c.get("message", {}).get("content", ""),
+                        content=c.get("message", {}).get("content", "") or "",
                     ),
-                    finish_reason=c.get("finish_reason", "stop"),
+                    finish_reason=c.get("finish_reason", "stop") or "stop",
                 )
                 for c in data.get("choices", [])
             ]
@@ -206,7 +218,7 @@ class LLMProxyClient:
             response_obj = ChatCompletionResponse(
                 id=data.get("id", f"chatcmpl-{uuid.uuid4().hex[:12]}"),
                 created=data.get("created", int(time.time())),
-                model=fallback_model,
+                model=resolved_model,
                 choices=choices,
                 usage=UsageInfo(
                     prompt_tokens=prompt_tokens,
@@ -214,8 +226,10 @@ class LLMProxyClient:
                     total_tokens=total_tokens,
                 ),
                 gateway_metadata={
-                    "provider": "gemini",
-                    "fallback_triggered": True,
+                    "provider": "openrouter",
+                    "router_model": fallback_model,
+                    "resolved_model": resolved_model,
+                    "fallback_triggered": (request.model or "") != "openrouter/free",
                     "latency_ms": round(latency_ms, 2),
                     "cost_usd": cost,
                 },
@@ -223,7 +237,7 @@ class LLMProxyClient:
             return response_obj, latency_ms, cost
 
         raise httpx.HTTPStatusError(
-            f"Gemini returned HTTP {resp.status_code}: {resp.text}",
+            f"OpenRouter returned HTTP {resp.status_code}: {resp.text}",
             request=resp.request,
             response=resp,
         )

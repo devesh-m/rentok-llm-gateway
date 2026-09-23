@@ -24,7 +24,8 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         "database": db_status,
         "providers": {
             "groq_configured": bool(settings.GROQ_API_KEY),
-            "gemini_configured": bool(settings.GEMINI_API_KEY),
+            "openrouter_configured": bool(settings.OPENROUTER_API_KEY),
+            "fallback_model": settings.FALLBACK_MODEL,
             "mock_fallback_enabled": settings.ENABLE_MOCK_FALLBACK,
         },
     }
@@ -199,7 +200,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <header>
       <div>
         <h1>RentOk Minimal LLM Gateway</h1>
-        <div class="subtitle">Virtual Keys &bull; Per-Key Budget Enforcement &bull; Groq + Gemini Fallback &bull; Smart Cache</div>
+        <div class="subtitle">Virtual Keys &bull; Per-Key Budget Enforcement &bull; Groq + OpenRouter (openrouter/free) Fallback &bull; Smart Cache</div>
       </div>
       <div style="display:flex; align-items:center; gap:14px;">
         <a href="/docs" style="font-size:0.85rem;">Swagger API Docs (/docs) &rarr;</a>
@@ -225,7 +226,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <select id="model-select">
           <option value="openai/gpt-oss-20b">openai/gpt-oss-20b (Groq Primary)</option>
           <option value="meta-llama/llama-4-scout-17b-16e-instruct">meta-llama/llama-4-scout-17b-16e-instruct (Groq Llama 4)</option>
-          <option value="gemini-1.5-flash">gemini-1.5-flash (Fallback Model)</option>
+          <option value="openrouter/free">openrouter/free (Fallback Router — OpenRouter Free Models)</option>
         </select>
 
         <label for="prompt-input">User Message Prompt</label>

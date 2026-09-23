@@ -3,7 +3,6 @@ from typing import Dict, Tuple
 # Pricing Matrix per 1 Million Tokens (in USD)
 # Format: (prompt_cost_per_million, completion_cost_per_million)
 MODEL_PRICING_PER_1M: Dict[str, Tuple[float, float]] = {
-    # Groq Models
     # Groq Models (Current 2026 Roster + Legacy)
     "openai/gpt-oss-20b": (0.10, 0.20),
     "openai/gpt-oss-120b": (0.50, 0.80),
@@ -16,10 +15,9 @@ MODEL_PRICING_PER_1M: Dict[str, Tuple[float, float]] = {
     "llama3-8b-8192": (0.05, 0.08),
     "mixtral-8x7b-32768": (0.24, 0.24),
 
-    # Google Gemini Models (OpenAI-compatible endpoint)
-    "gemini-1.5-flash": (0.075, 0.30),
-    "gemini-1.5-pro": (1.25, 5.00),
-    "gemini-2.0-flash": (0.10, 0.40),
+    # OpenRouter Free Auto-Router (Simulated shadow cost for virtual key budget enforcement)
+    "openrouter/free": (0.05, 0.10),
+    "openrouter": (0.05, 0.10),
 
     # Fallback / Default generic model pricing
     "default": (0.10, 0.20),

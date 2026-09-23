@@ -19,13 +19,12 @@ class Settings(BaseSettings):
     # Primary Provider (Groq)
     GROQ_API_KEY: Optional[str] = None
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
-    PRIMARY_MODEL: str = "llama-3.3-70b-versatile"
     PRIMARY_MODEL: str = "openai/gpt-oss-20b"
 
-    # Secondary / Fallback Provider (Gemini OpenAI-compatible endpoint)
-    GEMINI_API_KEY: Optional[str] = None
-    GEMINI_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta/openai"
-    FALLBACK_MODEL: str = "gemini-1.5-flash"
+    # Secondary / Fallback Provider (OpenRouter Free Auto-Router)
+    OPENROUTER_API_KEY: Optional[str] = None
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    FALLBACK_MODEL: str = "openrouter/free"
 
     # Resilience & Timeouts
     REQUEST_TIMEOUT_SECONDS: float = 15.0
