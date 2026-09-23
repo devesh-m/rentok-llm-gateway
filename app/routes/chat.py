@@ -65,9 +65,9 @@ async def chat_completions(
     # 1. Pre-Check: Authenticate Key & Enforce Budget
     key_obj = await usage_service.validate_virtual_key_and_budget(db, raw_key)
 
-    # 2. Smart Cache Check (Stretch Goal)
+    # 2. Smart Semantic + Exact Cache Check (Stretch Goal)
     prompt_hash = generate_prompt_hash(request)
-    cached_result = await cache_service.get(db, prompt_hash)
+    cached_result = await cache_service.get(db, prompt_hash, request=request)
 
     if cached_result:
         cached_response, cost_saved = cached_result
@@ -114,13 +114,14 @@ async def chat_completions(
         cost_saved=0.0,
     )
 
-    # 5. Populate Cache for subsequent requests
+    # 5. Populate Cache for subsequent exact & semantic requests
     await cache_service.set(
         session=db,
         prompt_hash=prompt_hash,
         model=llm_response.model,
         response=llm_response,
         cost=cost_usd,
+        request=request,
     )
 
     return llm_response

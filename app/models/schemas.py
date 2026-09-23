@@ -97,5 +97,6 @@ class CacheStatsResponse(BaseModel):
     cache_enabled: bool
     total_cached_entries: int
     total_cache_hits: int
+    hit_rate_percent: float = 0.0
     total_cost_saved_usd: float
 

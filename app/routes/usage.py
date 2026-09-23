@@ -88,19 +88,23 @@ async def get_key_usage(
 
 @router.get("/cache/stats", response_model=CacheStatsResponse)
 async def get_cache_stats(db: AsyncSession = Depends(get_db)):
-    """Retrieve cache hit rate metrics and cumulative USD cost saved."""
+    """Retrieve semantic cache hit rate metrics (%) and cumulative USD cost saved."""
     count_query = select(func.count(ResponseCache.prompt_hash))
     hits_query = select(func.coalesce(func.sum(ResponseCache.hit_count), 0))
     savings_query = select(func.coalesce(func.sum(ResponseCache.cost_saved), 0.0))
+    req_query = select(func.count(UsageLog.id))
 
     total_entries = (await db.execute(count_query)).scalar() or 0
     total_hits = (await db.execute(hits_query)).scalar() or 0
     total_saved = (await db.execute(savings_query)).scalar() or 0.0
+    total_requests = (await db.execute(req_query)).scalar() or 0
+    hit_rate = round((total_hits / total_requests) * 100.0, 2) if total_requests > 0 else 0.0
 
     return CacheStatsResponse(
         cache_enabled=settings.CACHE_ENABLED,
         total_cached_entries=total_entries,
         total_cache_hits=total_hits,
+        hit_rate_percent=hit_rate,
         total_cost_saved_usd=round(total_saved, 6),
     )
 

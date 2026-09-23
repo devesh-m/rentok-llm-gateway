@@ -465,7 +465,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (cacheRes.ok) {
           const c = await cacheRes.json();
           document.getElementById('stat-saved').textContent = '$' + Number(c.total_cost_saved_usd).toFixed(6);
-          document.getElementById('cache-summary').textContent = `Cache Hits: ${c.total_cache_hits} | Cached Prompts: ${c.total_cached_entries}`;
+          document.getElementById('cache-summary').textContent = `Hit Rate: ${c.hit_rate_percent ?? 0}% | Cache Hits: ${c.total_cache_hits} | Cached Prompts: ${c.total_cached_entries}`;
         }
       } catch (e) {
         console.error(e);

@@ -98,18 +98,29 @@ async def test_caching_and_cost_savings(client):
     assert resp1.status_code == 200
     assert resp1.headers["X-Cache"] == "MISS"
 
-    # Second request: Cache HIT
+    # Second request: Exact-match Cache HIT
     resp2 = await client.post("/v1/chat/completions", headers=headers, json=payload)
     assert resp2.status_code == 200
     assert resp2.headers["X-Cache"] == "HIT"
     assert resp2.headers["X-Provider"] == "cache"
 
-    # Verify cache analytics reflect the hit and cost saved
+    # Third request: Semantic Paraphrase Cache HIT (different wording, same meaning)
+    paraphrase_payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "Can you please explain gravity in one short sentence?"}],
+    }
+    resp3 = await client.post("/v1/chat/completions", headers=headers, json=paraphrase_payload)
+    assert resp3.status_code == 200
+    assert resp3.headers["X-Cache"] == "HIT"
+    assert "semantic" in resp3.json()["gateway_metadata"]["cache_match_type"]
+
+    # Verify cache analytics reflect the hit rate (%) and cost saved ($)
     stats_resp = await client.get("/v1/admin/cache/stats")
     assert stats_resp.status_code == 200
     stats = stats_resp.json()
     assert stats["total_cached_entries"] >= 1
-    assert stats["total_cache_hits"] >= 1
+    assert stats["total_cache_hits"] >= 2
+    assert stats["hit_rate_percent"] > 0.0
     assert stats["total_cost_saved_usd"] > 0.0
 
 
