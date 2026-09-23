@@ -1,11 +1,11 @@
 # RentOk Minimal LLM Gateway
 
-A high-performance, resilient, and production-grade LLM Gateway built with **FastAPI**. It acts as an intelligent intermediary between client applications and upstream LLM providers (Groq and Google Gemini), adding virtual API keys, per-key budget caps, token/cost spend logging, multi-provider fallback resilience, and response caching.
+A high-performance, resilient, and production-grade LLM Gateway built with **FastAPI**. It acts as an intelligent intermediary between client applications and upstream LLM providers (Groq and OpenRouter `openrouter/free`), adding virtual API keys, per-key budget caps, token/cost spend logging, multi-provider fallback resilience, and response caching.
 
 ---
 
 ## Live Production Deployment
-- **Live Gateway URL:** [https://rentok-llm-gateway.fastapicloud.dev](https://rentok-llm-gateway.fastapicloud.dev)
+- **Live Gateway Console & Spend Dashboard:** [https://rentok-llm-gateway.fastapicloud.dev](https://rentok-llm-gateway.fastapicloud.dev)
 - **Interactive API Docs (Swagger UI):** [https://rentok-llm-gateway.fastapicloud.dev/docs](https://rentok-llm-gateway.fastapicloud.dev/docs)
 - **Health Check:** [https://rentok-llm-gateway.fastapicloud.dev/health](https://rentok-llm-gateway.fastapicloud.dev/health)
 
@@ -41,7 +41,7 @@ curl -i -X POST https://rentok-llm-gateway.fastapicloud.dev/v1/chat/completions 
 - **Virtual API Keys:** Client applications authenticate using gateway-issued keys (`gw-live-xxxx`). Upstream provider credentials remain strictly isolated server-side.
 - **Hard Budget Enforcement:** Each virtual key has a configurable spending cap in USD ($). If exceeded, requests are cleanly blocked with HTTP `429 Too Many Requests`.
 - **Granular Usage & Spend Logging:** Every proxied request records prompt/completion tokens, calculated costs, provider, and latency into an ACID-compliant datastore.
-- **Multi-Provider Fallback Resilience:** Automatically falls back from Primary (Groq / `openai/gpt-oss-20b`) to Secondary (Google Gemini / `gemini-1.5-flash`) on timeouts, rate limits (429), or server errors (5xx).
+- **Multi-Provider Fallback Resilience:** Automatically falls back from Primary (Groq / `openai/gpt-oss-20b`) to Secondary (OpenRouter Free Auto-Router / `openrouter/free`, e.g. `nvidia/nemotron-3-super-120b-a12b:free`) on timeouts, rate limits (429), or server errors (5xx).
 - **Smart Response Caching (Stretch Goal):** Bypasses upstream LLM inference for identical queries, returning responses in <5ms with `X-Cache: HIT` while measuring cumulative cost savings (`GET /v1/admin/cache/stats`).
 
 ---

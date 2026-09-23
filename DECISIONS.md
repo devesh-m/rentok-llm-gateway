@@ -1,7 +1,7 @@
 # DECISIONS.md — System Design, Architecture & Tradeoffs
 
 ## 1. What Was Built (in 3–4 Sentences)
-We built a production-focused, lightweight **LLM Gateway** in Python using **FastAPI** that sits between client applications and upstream LLM providers (Groq and Google Gemini). The gateway issues virtual API keys, enforces hard per-key budget limits (in USD spend), tracks granular prompt/completion token usage in an ACID-compliant datastore, and provides automated provider fallback resilience when the primary provider encounters timeouts, rate limits, or server errors. In addition, an exact-match prompt cache (stretch goal) bypasses upstream inference entirely for identical queries, returning results in under 5ms while tracking cumulative cost savings.
+We built a production-focused, lightweight **LLM Gateway** in Python using **FastAPI** that sits between client applications and upstream LLM providers (Groq and OpenRouter `openrouter/free`). The gateway issues virtual API keys, enforces hard per-key budget limits (in USD spend), tracks granular prompt/completion token usage in an ACID-compliant datastore, and provides automated provider fallback resilience when the primary provider encounters timeouts, rate limits, or server errors. In addition, an exact-match prompt cache (stretch goal) bypasses upstream inference entirely for identical queries, returning results in under 5ms while tracking cumulative cost savings.
 
 ---
 
@@ -31,9 +31,9 @@ We built a production-focused, lightweight **LLM Gateway** in Python using **Fas
                                  ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ 3. Resilient LLM Dispatch (Primary -> Secondary Fallback)       │
-│    - Step A: Attempt Primary Provider (Groq / Llama 3.3 70B).   │
+│    - Step A: Attempt Primary Provider (Groq / gpt-oss-20b).     │
 │    - Step B: If Groq returns 429, 5xx, or times out (15s):      │
-│              Catch exception & dispatch to Fallback (Gemini).   │
+│              Catch exception & route to OpenRouter (openrouter/free).│
 │    - Step C: If all remote providers fail / offline:            │
 │              Gracefully route to structured Mock Provider.      │
 └────────────────────────────────┬────────────────────────────────┘
